@@ -62,8 +62,17 @@ async def _one(provider: Provider, query: str, limit: int, since: str | None,
         kwargs = {k: v for k, v in extra.items() if k in _accepted(provider)}
         res = await provider.search(query, limit=limit, since=since, until=until, **kwargs)
         return provider.name, res
+    except _partial() as pr:
+        # A provider enforcing a constraint the upstream API ignored. The
+        # surviving results are good; the drop count is worth reporting.
+        return provider.name, pr
     except (ProviderError, Exception) as e:   # noqa: BLE001 - nothing may escape
         return provider.name, e
+
+
+def _partial():
+    from .providers.tavily import _PartialResults
+    return _PartialResults
 
 
 def _accepted(provider: Provider) -> set[str]:
@@ -99,6 +108,15 @@ async def fan_out(
     collected: dict[str, list[Result]] = {p.name: [] for p in live}
     stats: dict[str, Any] = {}
     for name, outcome in raw:
+        if isinstance(outcome, _partial()):
+            collected[name].extend(outcome.results)
+            prev = stats.get(name)
+            stats[name] = {
+                "kept": (prev.get("kept", 0) if isinstance(prev, dict) else (prev or 0)) + len(outcome.results),
+                "discarded_ignored_filter": (prev.get("discarded_ignored_filter", 0) if isinstance(prev, dict) else 0) + outcome.dropped,
+                "note": f"upstream ignored include_domains={outcome.domains}; enforced locally",
+            }
+            continue
         if isinstance(outcome, Exception):
             # One source failing must not fail the pass -- record and move on.
             stats[name] = f"error: {type(outcome).__name__}: {outcome}"

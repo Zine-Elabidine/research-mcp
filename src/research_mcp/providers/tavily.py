@@ -68,8 +68,19 @@ class Tavily(Provider):
             except httpx.HTTPError as e:
                 raise ProviderError(f"tavily: {e}") from e
 
+        # Tavily SILENTLY DROPS include_domains when a query matches nothing on
+        # the requested domain, returning unrelated off-domain results with no
+        # flag. Observed 2026-09-19: "runna app injury complaints" honoured
+        # ["reddit.com"]; the same question phrased longer came back with
+        # youtube.com and a Maroon 5 video. A constraint that silently stops
+        # applying is worse than one that errors -- the list still looks
+        # plausible. Enforce it here and report what was discarded.
+        dropped = 0
         out: list[Result] = []
         for item in d.get("results", []):
+            if domains and not _host_matches(item.get("url", ""), domains):
+                dropped += 1
+                continue
             out.append(
                 Result(
                     source=self.name,
@@ -82,7 +93,31 @@ class Tavily(Provider):
                     raw={"relevance": item.get("score")},
                 )
             )
+        if dropped:
+            # Surfaced through the provider stats rather than swallowed, so a
+            # thin result set is legible instead of mysterious.
+            raise _PartialResults(out, dropped, domains or [])
         return out
+
+
+class _PartialResults(Exception):
+    """Carries results plus the count silently dropped by a server-side filter
+    that did not apply. The router unwraps this -- it is signal, not failure."""
+
+    def __init__(self, results: list[Result], dropped: int, domains: list[str]) -> None:
+        self.results = results
+        self.dropped = dropped
+        self.domains = domains
+        super().__init__(
+            f"{dropped} result(s) ignored include_domains={domains} and were discarded"
+        )
+
+
+def _host_matches(url: str, domains: list[str]) -> bool:
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    return any(host == d.lower().removeprefix("www.") or host.endswith("." + d.lower().removeprefix("www."))
+               for d in domains)
 
 
 def _parse(s: str | None) -> datetime | None:

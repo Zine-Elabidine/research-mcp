@@ -104,7 +104,23 @@ npx @modelcontextprotocol/inspector uv --directory ~/research-mcp run research-m
 - **Tavily** — free key at app.tavily.com, no card. Advanced depth costs more
   than one credit, so a fanned-out pass burns the tier faster than the headline
   1,000 suggests: budget ~20–30 real research tasks/month.
-- **Reddit** — free for non-commercial (100 QPM with OAuth). ⚠ Self-service
+- **Reddit** — ⛔ **currently unreachable.** Self-service app creation is closed
+  under the Responsible Builder Policy (create app returns a policy link, not
+  credentials), and unauthenticated `.json` endpoints return 403. Two things
+  that do NOT work as substitutes, both verified 2026-09-19:
+  - Tavily scoped to `reddit.com` returns subreddit *landing pages*
+    (r/nfl, r/nsfw, r/deathbattle) regardless of query — Reddit blocks crawlers,
+    so no web index holds thread content.
+  - Tavily also **silently drops `include_domains`** when nothing matches on the
+    domain, returning unrelated off-domain results with no flag. Enforced
+    client-side now; discards are reported in provider stats.
+
+  Complaint mining without Reddit: unfiltered web search surfaces Trustpilot,
+  app-store reviews and review blogs, which carry the same 1-star language and
+  are actually crawlable.
+
+  Original terms, if access is ever granted: free for non-commercial (100 QPM
+  with OAuth). ⚠ Self-service
   registration closed in late 2025; every app is **manually approved and can be
   silently rejected**. Register a `script` app at reddit.com/prefs/apps early —
   this is the long pole.
