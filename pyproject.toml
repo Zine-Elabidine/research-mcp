@@ -1,0 +1,18 @@
+[project]
+name = "research-mcp"
+version = "0.1.0"
+description = "Federated multi-source research MCP server: HN, Reddit, X, web -- with a local corpus that compounds."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]>=2.2.0",
+    "python-dotenv>=1.2.3",
+]
+
+[project.scripts]
+research-mcp = "research_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

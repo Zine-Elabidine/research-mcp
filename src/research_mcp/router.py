@@ -1,0 +1,145 @@
+"""Fan-out, merge, dedup.
+
+This is the layer the whole tool exists for. Providers are commodities; the
+value is in asking several source *classes* the same question and letting the
+disagreements show. The failure this was built to prevent: 2026-09-19, a single
+web-search pass returned SEO content farms all repeating "the AI wrapper era is
+over", while one structured data point (Cal AI, $40M ARR, 7 people) said the
+opposite. Consensus is not corroboration.
+
+Three behaviours matter here:
+  - concurrency: every provider queried at once, one slow source never serialises
+  - graceful degradation: a dead provider is recorded and skipped, never fatal
+  - interleaving: results round-robin across providers so no single source owns
+    the top of the list, which is exactly how single-source bias creeps back in
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from typing import Any, Sequence
+
+from .providers.base import Provider, ProviderError, Result
+
+
+@dataclass
+class Pass:
+    """One research pass: what was asked, what answered, what came back."""
+    question: str
+    queries: list[str]
+    results: list[Result]
+    providers: dict[str, Any] = field(default_factory=dict)   # name -> count | "error: ..."
+    skipped: dict[str, str] = field(default_factory=dict)     # name -> why
+
+    def to_model(self, max_text: int = 600) -> dict[str, Any]:
+        items = [r.to_model(max_text) for r in self.results]
+        for item, r in zip(items, self.results):
+            if extra := getattr(r, "_also_in", None):
+                item["corroborated_by"] = sorted(extra)
+        out: dict[str, Any] = {
+            "question": self.question,
+            "queries_issued": self.queries,
+            "providers": self.providers,
+            "count": len(items),
+            "results": items,
+        }
+        if self.skipped:
+            out["skipped"] = self.skipped
+        return out
+
+
+async def _one(provider: Provider, query: str, limit: int, since: str | None,
+               until: str | None, extra: dict[str, Any]) -> tuple[str, list[Result] | Exception]:
+    try:
+        kwargs = {k: v for k, v in extra.items() if k in _accepted(provider)}
+        res = await provider.search(query, limit=limit, since=since, until=until, **kwargs)
+        return provider.name, res
+    except (ProviderError, Exception) as e:   # noqa: BLE001 - nothing may escape
+        return provider.name, e
+
+
+def _accepted(provider: Provider) -> set[str]:
+    """Provider-specific kwargs (min_points, subreddits, ...) are opt-in; pass
+    only what a given provider's signature actually declares."""
+    import inspect
+    try:
+        return set(inspect.signature(provider.search).parameters)
+    except (TypeError, ValueError):
+        return set()
+
+
+async def fan_out(
+    providers: Sequence[Provider],
+    question: str,
+    *,
+    queries: Sequence[str] | None = None,
+    limit_per: int = 20,
+    since: str | None = None,
+    until: str | None = None,
+    **extra: Any,
+) -> Pass:
+    """Run every available provider over every query, concurrently."""
+    qs = list(queries) if queries else [question]
+
+    live = [p for p in providers if p.available()]
+    skipped = {p.name: "not configured (missing credentials)"
+               for p in providers if not p.available()}
+
+    jobs = [_one(p, q, limit_per, since, until, extra) for p in live for q in qs]
+    raw = await asyncio.gather(*jobs) if jobs else []
+
+    collected: dict[str, list[Result]] = {p.name: [] for p in live}
+    stats: dict[str, Any] = {}
+    for name, outcome in raw:
+        if isinstance(outcome, Exception):
+            # One source failing must not fail the pass -- record and move on.
+            stats[name] = f"error: {type(outcome).__name__}: {outcome}"
+            continue
+        collected[name].extend(outcome)
+        stats[name] = stats.get(name, 0) + len(outcome)
+
+    merged = _interleave(collected)
+    return Pass(question=question, queries=qs, results=merged,
+                providers=stats, skipped=skipped)
+
+
+def _interleave(by_provider: dict[str, list[Result]]) -> list[Result]:
+    """Round-robin across providers, deduping as we go.
+
+    Round-robin rather than score-sorting on purpose: engagement scores are not
+    comparable across platforms (an HN 500 and a Reddit 500 mean different
+    things), and sorting by any one of them hands the top of the list to
+    whichever source is chattiest.
+    """
+    # Dedup within each provider first, preserving its own ordering.
+    seen_local: dict[str, set[str]] = {}
+    for name, items in by_provider.items():
+        keep, seen = [], set()
+        for r in items:
+            if r.fingerprint in seen:
+                continue
+            seen.add(r.fingerprint)
+            keep.append(r)
+        by_provider[name] = keep
+        seen_local[name] = seen
+
+    out: list[Result] = []
+    index: dict[str, Result] = {}
+    queues = [list(v) for v in by_provider.values() if v]
+    while queues:
+        for q in list(queues):
+            if not q:
+                queues.remove(q)
+                continue
+            r = q.pop(0)
+            fp = r.fingerprint
+            if (prev := index.get(fp)) is not None:
+                # Same item from a second source == cross-source corroboration.
+                also = getattr(prev, "_also_in", set())
+                also.add(r.source)
+                prev._also_in = also  # type: ignore[attr-defined]
+                continue
+            index[fp] = r
+            out.append(r)
+    return out
