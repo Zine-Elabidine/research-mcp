@@ -108,18 +108,24 @@ npx @modelcontextprotocol/inspector uv --directory ~/research-mcp run research-m
   registration closed in late 2025; every app is **manually approved and can be
   silently rejected**. Register a `script` app at reddit.com/prefs/apps early —
   this is the long pole.
-- **X** — 100,000 credits = $1; 15 credits per tweet (min 15/call). Billing is
-  per PAGE (~20 tweets ≈ 300 credits ≈ **$0.003**), not per result, so `limit`
-  only trims what Claude is shown — everything fetched is stored. $1 ≈ 6,600
-  tweets, so cost is effectively a rounding error; `min_faves` is for result
-  quality, not budget. Free tier is rate-limited to 0.2 QPS (1 request per 5s),
-  which *will* matter once several queries run concurrently.
-  No free tier officially ($0.005/read, 7-day window; full archive is
-  Enterprise at $42K+/mo). twitterapi.io gives the full archive for $0.15/1k with
-  no gate. Legally split: hiQ v. LinkedIn means scraping public data isn't a CFAA
-  violation, but it does breach X's ToS — fine for personal tooling, revisit
-  entirely if this ever ships to users.
-
+- **X** — the official API has no free tier ($0.005/read, **7-day search
+  window**; full archive is Enterprise at $42K+/mo). twitterapi.io gives the
+  full archive with no gate.
+  - **Cost is a rounding error.** 100,000 credits = $1, 15 credits per tweet
+    (min 15/call). Billing is per PAGE: ~20 tweets ≈ 300 credits ≈ **$0.003**.
+    $1 ≈ 6,600 tweets. `limit` only trims what Claude is *shown* — everything
+    fetched is stored — so `min_faves` is a result-quality lever, not a budget one.
+  - **QPS is the real limit.** A never-paid account is capped at **0.2 QPS**
+    (one request per five seconds), which throttles concurrent fan-out long
+    before credits run out. Any paid top-up lifts it to 3 QPS permanently. The
+    pricing table lists Free at 3/s — that's the *past-customer* rate.
+  - **Don't subscribe.** Starter at $29/mo delivers ~208k tweets/month against
+    a need of a few thousand. Pay-as-you-go $5 ≈ 33k tweets and flips the QPS
+    tier for good.
+  - ⚠ Legally split: hiQ v. LinkedIn means scraping public data isn't a CFAA
+    violation, but it does breach X's ToS — fine for personal tooling, revisit
+    entirely if this ever ships to users. Providers in this category do get shut
+    down (SocialData.tools), hence the swappable interface and the corpus.
 ## Status
 
 v0.1 — `search_community` (HN + Reddit + X), `search_web` (Tavily), corpus.
