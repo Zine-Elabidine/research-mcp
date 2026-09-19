@@ -49,6 +49,7 @@ class X(Provider):
         until: str | None = None,
         min_faves: int | None = None,
         lang: str | None = None,
+        sort: str = "top",   # "top" = engagement-ranked | "latest" = newest first
     ) -> list[Result]:
         # Compose X advanced-search syntax rather than exposing raw params.
         q = query
@@ -71,7 +72,12 @@ class X(Provider):
         cursor = ""
         async with httpx.AsyncClient(timeout=30) as client:
             while len(out) < limit:
-                params = {"query": q, "queryType": "Top"}
+                # "Top" ranks by engagement and skews OLD -- measured
+                # 2026-09-19, a Top search for "hyrox training" returned
+                # results 550, 599 and 852 days old. "Latest" returns today's.
+                # Neither is right by default: Top finds the strongest signal,
+                # Latest answers "what is happening now". The caller picks.
+                params = {"query": q, "queryType": "Latest" if sort == "latest" else "Top"}
                 if cursor:
                     params["cursor"] = cursor
                 try:

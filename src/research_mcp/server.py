@@ -50,6 +50,7 @@ async def search_community(
     min_points: int | None = None,
     min_faves: int | None = None,
     include_comments: bool = False,
+    sort: str = "top",
     limit: int = 15,
 ) -> dict[str, Any]:
     """Search what real people said, in their own words, across Hacker News,
@@ -80,6 +81,12 @@ async def search_community(
         min_faves: X like floor. Worth setting: X bills per page whether the
             tweets are useful or not, so filtering junk up front is the main
             lever on cost. ~10 for niche topics, ~100 for busy ones.
+        sort: "top" (default) ranks X by engagement and skews OLD -- a Top
+            search can return results 1-2 years back. "latest" returns today's
+            posts, but they have near-zero likes because nothing has had time
+            to vote, so min_faves must be dropped when using it. Use "top" for
+            "what is the strongest signal", "latest" for "what is happening
+            right now".
         include_comments: also search reply bodies, not just posts/stories.
             Slower and noisier, but where complaints actually live -- the
             first-person "this plan wrecked my knee" account is a reply, not
@@ -92,7 +99,7 @@ async def search_community(
         chosen, question,
         limit_per=limit, since=since, until=until,
         subreddits=subreddits, min_points=min_points, min_faves=min_faves,
-        include_comments=include_comments,
+        include_comments=include_comments, sort=sort,
     )
     corpus.record(tool="search_community", question=question, queries=res.queries,
                   providers=res.providers, results=res.results)
