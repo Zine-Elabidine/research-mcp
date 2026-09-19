@@ -39,7 +39,8 @@ API = "https://arctic-shift.photon-reddit.com/api"
 #
 # The limiter is module-level because the router fans out concurrently; a
 # per-instance one would let parallel calls trip the limit together.
-_MIN_INTERVAL = 5.0
+_MIN_INTERVAL = 5.0        # full-text search: expensive, trips the limiter
+_MIN_INTERVAL_LIST = 1.5   # plain listings: ~1s server-side, far lighter
 
 # ONE request per call. Measured: a single keyword search takes 8-18s including
 # retries, and a second immediately afterwards is refused. Arctic Shift is a
@@ -51,14 +52,22 @@ _MIN_INTERVAL = 5.0
 # all. The right usage is several narrow calls spaced out, one subreddit at a
 # time, which the tool description tells the caller to do.
 _MAX_REQUESTS = 1
+
+# Pages of 100 when browsing by date. Measured: a listing returns 100 posts in
+# ~1s, while ONE server-side keyword search over the same subreddit takes 8-18s
+# and then trips the throttle. So browsing a date window and filtering locally
+# is both faster and more complete -- it covers everything in the window rather
+# than whatever the archive's relevance ranking decides to surface.
+_PAGE = 100
+_MAX_PAGES = 12
 _lock = asyncio.Lock()
 _last = 0.0
 
 
-async def _throttle() -> None:
+async def _throttle(interval: float = _MIN_INTERVAL) -> None:
     global _last
     async with _lock:
-        wait = _MIN_INTERVAL - (time.monotonic() - _last)
+        wait = interval - (time.monotonic() - _last)
         if wait > 0:
             await asyncio.sleep(wait)
         _last = time.monotonic()
@@ -88,6 +97,20 @@ class Reddit(Provider):
                 "reddit (arctic-shift) has no global full-text search: pass "
                 "subreddits, e.g. ['running','hyrox','Garmin']"
             )
+
+        # Fast path. With a date window we can page listings (~1s per 100
+        # posts) and match locally, instead of paying 8-18s for one throttled
+        # full-text search. It is also more COMPLETE: browsing covers every
+        # post in the window, where search returns only what ranks -- and
+        # "what do people complain about" is a question about the whole
+        # window, not about the best-known threads in it.
+        if since and not include_comments:
+            posts = await self.browse(subreddits[0], since=since, until=until)
+            hits = [r for r in posts if _matches(r, query)] if query else posts
+            if len(subreddits) > 1:
+                raise _Truncated(hits[:limit] if limit else hits,
+                                 [(s, "posts") for s in subreddits[1:]])
+            return hits
 
         kinds = ["posts", "comments"] if include_comments else ["posts"]
 
@@ -128,6 +151,53 @@ class Reddit(Provider):
             raise _Truncated(out, skipped)
         return out
 
+    async def browse(
+        self,
+        subreddit: str,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        max_pages: int = _MAX_PAGES,
+    ) -> list[Result]:
+        """Page a subreddit backwards by date. No full-text search involved.
+
+        This is the fast path: ~1s per 100 posts versus 8-18s for one keyword
+        search. It also gives *complete* coverage of the window, where search
+        gives only what ranks -- which matters when the question is "what do
+        people complain about", not "find the best-known thread".
+        """
+        out: list[Result] = []
+        before = until
+        async with httpx.AsyncClient(
+            timeout=60, follow_redirects=True,
+            headers={"User-Agent": "research-mcp/0.1 (personal research tool)"},
+        ) as client:
+            for _ in range(max_pages):
+                params: dict[str, object] = {
+                    "subreddit": subreddit, "limit": _PAGE, "sort": "desc",
+                }
+                if before:
+                    params["before"] = before
+                if since:
+                    params["after"] = since
+
+                page = await self._get(client, f"{API}/posts/search", params, light=True)
+                if not page:
+                    break
+                for item in page:
+                    r = _to_result(item, "posts", "")
+                    if not _is_empty(r):
+                        out.append(r)
+                oldest = page[-1].get("created_utc")
+                if not oldest:
+                    break
+                # Step the cursor one second past the oldest row to avoid
+                # re-requesting the same boundary post forever.
+                before = datetime.fromtimestamp(oldest - 1, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                if len(page) < _PAGE:
+                    break
+        return out
+
     async def comment_tree(self, post_id: str, limit: int = 500) -> list[Result]:
         """Full discussion under one post (server caps at 25k comments).
 
@@ -144,9 +214,9 @@ class Reddit(Provider):
         return [_to_result(c, "comments", f"tree:{post_id}") for c in data]
 
     async def _get(self, client: httpx.AsyncClient, url: str,
-                   params: dict[str, object]) -> list[dict]:
+                   params: dict[str, object], *, light: bool = False) -> list[dict]:
         for attempt in range(3):
-            await _throttle()
+            await _throttle(_MIN_INTERVAL_LIST if light else _MIN_INTERVAL)
             try:
                 r = await client.get(url, params=params)
             except httpx.HTTPError as e:
@@ -191,6 +261,24 @@ def _is_empty(r: Result) -> bool:
     # A comment with no body at all is pure noise; a post without selftext may
     # still be a link post worth keeping.
     return r.raw.get("kind") == "comments" and not body
+
+
+def _matches(r: Result, query: str) -> bool:
+    """Whole-word match over title + body.
+
+    Substring matching looked fine and was not: it pulled "SLC female partner
+    needed" into an injury search. Word boundaries with a light plural/suffix
+    allowance keep recall without that.
+    """
+    import re
+    hay = f"{r.title} {r.text}".lower()
+    terms = [t for t in re.findall(r"[a-z0-9]{3,}", query.lower()) if t not in _STOP]
+    if not terms:
+        return True
+    return any(re.search(rf"\b{re.escape(t)}\w{{0,4}}\b", hay) for t in terms)
+
+
+_STOP = {"the", "and", "for", "with", "что", "are", "was", "how", "why", "who"}
 
 
 class _Truncated(Exception):

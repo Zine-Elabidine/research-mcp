@@ -114,7 +114,14 @@ npx @modelcontextprotocol/inspector uv --directory ~/research-mcp run research-m
     except Google's ($60M licensing deal), so Bing, DuckDuckGo and the AI search
     APIs built on them see nothing. Tavily scoped to `reddit.com` returns
     subreddit landing pages regardless of query — verified 2026-09-19.
-  - ⚠ **Slow and heavily throttled.** Measured, not from the docs: the published
+  - **Browse, don't search.** A plain listing returns 100 posts in ~1s; one
+    server-side keyword search over the same subreddit takes 8-18s and trips
+    the throttle. So with a date window the provider pages listings and matches
+    locally: 19 days of r/hyrox in 8.5s. It is also more *complete* — browsing
+    covers every post in the window, where search returns only what ranks, and
+    "what do people complain about" is a question about the whole window.
+    The archive is near-real-time: newest post observed 1.2h old.
+  - ⚠ **Slow and heavily throttled** on the full-text path. Measured, not from the docs: the published
     "~2 req/s" trips a 429 immediately and leaves the endpoint answering 422 for
     a while after. One keyword search takes 8–18s including retries, and a
     second straight after is refused. It sustains roughly **one search per
