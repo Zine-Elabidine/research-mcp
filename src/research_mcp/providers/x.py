@@ -40,6 +40,30 @@ class X(Provider):
     def available(self) -> bool:
         return bool(self._key)
 
+    async def balance(self) -> dict[str, object] | None:
+        """Remaining credits. 100,000 credits = $1, ~300 per call (20 tweets).
+
+        Surfaced because the free bonus is small in absolute terms (~$0.10) and
+        runs out quietly -- a search that silently stops returning results is
+        indistinguishable from a topic nobody discusses.
+        """
+        if not self._key:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(f"{BASE}/oapi/my/info",
+                                     headers={"X-API-Key": self._key})
+                r.raise_for_status()
+                d = r.json()
+        except httpx.HTTPError:
+            return None
+        credits = (d.get("recharge_credits") or 0) + (d.get("total_bonus_credits") or 0)
+        return {
+            "credits": credits,
+            "usd": round(credits / 100_000, 4),
+            "approx_calls_left": credits // 300,
+        }
+
     async def search(
         self,
         query: str,

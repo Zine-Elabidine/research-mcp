@@ -156,15 +156,17 @@ async def providers_status() -> dict[str, Any]:
     present. Call this when results look thin -- a missing key means a whole
     source class is silently absent from every search."""
     allp = [HN, REDDIT, XP, TAVILY]
-    return {
-        "providers": [
-            {"name": p.name, "class": p.source_class,
-             "available": p.available(),
-             "needs": _needs(p.name) if not p.available() else None}
-            for p in allp
-        ],
-        "corpus": str(corpus.path),
-    }
+    rows = [
+        {"name": p.name, "class": p.source_class,
+         "available": p.available(),
+         "needs": _needs(p.name) if not p.available() else None}
+        for p in allp
+    ]
+    # Only X meters per call, and its free bonus is small enough to run out
+    # mid-question. A metered source going quiet must be visible.
+    if bal := await XP.balance():
+        next(r for r in rows if r["name"] == "x")["budget"] = bal
+    return {"providers": rows, "corpus": str(corpus.path)}
 
 
 def _needs(name: str) -> str:
