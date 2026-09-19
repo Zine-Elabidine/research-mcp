@@ -126,6 +126,7 @@ npx @modelcontextprotocol/inspector uv --directory ~/research-mcp run research-m
     violation, but it does breach X's ToS — fine for personal tooling, revisit
     entirely if this ever ships to users. Providers in this category do get shut
     down (SocialData.tools), hence the swappable interface and the corpus.
+
 ## Status
 
 v0.1 — `search_community` (HN + Reddit + X), `search_web` (Tavily), corpus.
