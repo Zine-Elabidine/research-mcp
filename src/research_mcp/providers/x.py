@@ -61,6 +61,12 @@ class X(Provider):
         if lang:
             q += f" lang:{lang}"
 
+        # Billing is per PAGE, not per result: a call returns ~20 tweets and
+        # is charged for ~20 regardless of how many we asked for. Truncating a
+        # page mid-way throws away data already paid for -- and from the one
+        # source most likely to vanish, where the corpus is the whole hedge.
+        # So: fetch whole pages, keep every row, let the caller trim what the
+        # model sees. Observed rate 2026-09-19: ~300 credits / 20 tweets.
         out: list[Result] = []
         cursor = ""
         async with httpx.AsyncClient(timeout=30) as client:
@@ -101,8 +107,6 @@ class X(Provider):
                             raw={"retweets": t.get("retweetCount"), "views": t.get("viewCount")},
                         )
                     )
-                    if len(out) >= limit:
-                        break
                 if not d.get("has_next_page"):
                     break
                 cursor = d.get("next_cursor") or ""

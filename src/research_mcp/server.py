@@ -48,6 +48,7 @@ async def search_community(
     since: str | None = None,
     until: str | None = None,
     min_points: int | None = None,
+    min_faves: int | None = None,
     limit: int = 15,
 ) -> dict[str, Any]:
     """Search what real people said, in their own words, across Hacker News,
@@ -68,17 +69,21 @@ async def search_community(
         subreddits: restrict Reddit to these, e.g. ["running", "hyrox"].
         since/until: "YYYY-MM-DD" bounds.
         min_points: HN score floor -- use ~50 to cut noise on broad topics.
-        limit: results per provider.
+        min_faves: X like floor. Worth setting: X bills per page whether the
+            tweets are useful or not, so filtering junk up front is the main
+            lever on cost. ~10 for niche topics, ~100 for busy ones.
+        limit: how many results to SHOW per provider. Everything retrieved is
+            stored in the corpus regardless -- this only trims the reply.
     """
     chosen = [COMMUNITY_PROVIDERS[p] for p in (platforms or COMMUNITY_PROVIDERS) if p in COMMUNITY_PROVIDERS]
     res = await fan_out(
         chosen, question,
         limit_per=limit, since=since, until=until,
-        subreddits=subreddits, min_points=min_points,
+        subreddits=subreddits, min_points=min_points, min_faves=min_faves,
     )
     corpus.record(tool="search_community", question=question, queries=res.queries,
                   providers=res.providers, results=res.results)
-    return res.to_model()
+    return res.to_model(max_shown=limit)
 
 
 @mcp.tool()
@@ -113,7 +118,7 @@ async def search_web(
     )
     corpus.record(tool="search_web", question=question, queries=res.queries,
                   providers=res.providers, results=res.results)
-    return res.to_model()
+    return res.to_model(max_shown=limit)
 
 
 @mcp.tool()

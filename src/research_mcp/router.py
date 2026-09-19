@@ -32,9 +32,13 @@ class Pass:
     providers: dict[str, Any] = field(default_factory=dict)   # name -> count | "error: ..."
     skipped: dict[str, str] = field(default_factory=dict)     # name -> why
 
-    def to_model(self, max_text: int = 600) -> dict[str, Any]:
-        items = [r.to_model(max_text) for r in self.results]
-        for item, r in zip(items, self.results):
+    def to_model(self, max_text: int = 600, max_shown: int | None = None) -> dict[str, Any]:
+        """What Claude sees. Deliberately narrower than what the corpus keeps:
+        paid-for rows are all stored, but tokens are the real running cost of a
+        research tool, so the model gets the top slice."""
+        shown = self.results[:max_shown] if max_shown else self.results
+        items = [r.to_model(max_text) for r in shown]
+        for item, r in zip(items, shown):
             if extra := getattr(r, "_also_in", None):
                 item["corroborated_by"] = sorted(extra)
         out: dict[str, Any] = {
@@ -44,6 +48,9 @@ class Pass:
             "count": len(items),
             "results": items,
         }
+        if len(shown) < len(self.results):
+            out["not_shown"] = len(self.results) - len(shown)
+            out["note_storage"] = "all retrieved results are in the corpus"
         if self.skipped:
             out["skipped"] = self.skipped
         return out
