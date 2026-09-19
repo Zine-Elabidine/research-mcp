@@ -45,10 +45,10 @@ class HackerNews(Provider):
         since: str | None = None,
         until: str | None = None,
         min_points: int | None = None,
-        kind: str = "story",       # "story" | "comment" | "all"
+        include_comments: bool = False,
         sort: str = "relevance",   # "relevance" | "date"
     ) -> list[Result]:
-        tags = {"story": "story", "comment": "comment", "all": "(story,comment)"}.get(kind, "story")
+        tags = "(story,comment)" if include_comments else "story"
 
         numeric = []
         if (a := _ts(since)) is not None:

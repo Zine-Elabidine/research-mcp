@@ -71,8 +71,10 @@ async def _one(provider: Provider, query: str, limit: int, since: str | None,
 
 
 def _partial():
+    """Exception types that carry usable results alongside a caveat."""
+    from .providers.reddit import _Truncated
     from .providers.tavily import _PartialResults
-    return _PartialResults
+    return (_PartialResults, _Truncated)
 
 
 def _accepted(provider: Provider) -> set[str]:
@@ -111,11 +113,15 @@ async def fan_out(
         if isinstance(outcome, _partial()):
             collected[name].extend(outcome.results)
             prev = stats.get(name)
-            stats[name] = {
-                "kept": (prev.get("kept", 0) if isinstance(prev, dict) else (prev or 0)) + len(outcome.results),
-                "discarded_ignored_filter": (prev.get("discarded_ignored_filter", 0) if isinstance(prev, dict) else 0) + outcome.dropped,
-                "note": f"upstream ignored include_domains={outcome.domains}; enforced locally",
-            }
+            base = prev.get("kept", 0) if isinstance(prev, dict) else (prev or 0)
+            entry: dict[str, Any] = {"kept": base + len(outcome.results)}
+            if hasattr(outcome, "dropped"):
+                entry["discarded_ignored_filter"] = outcome.dropped
+                entry["note"] = f"upstream ignored include_domains={outcome.domains}; enforced locally"
+            else:
+                entry["not_searched"] = [f"r/{s} {k}" for s, k in outcome.skipped]
+                entry["note"] = "request budget reached; coverage is partial"
+            stats[name] = entry
             continue
         if isinstance(outcome, Exception):
             # One source failing must not fail the pass -- record and move on.

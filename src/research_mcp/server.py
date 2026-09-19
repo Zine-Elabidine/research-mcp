@@ -49,6 +49,7 @@ async def search_community(
     until: str | None = None,
     min_points: int | None = None,
     min_faves: int | None = None,
+    include_comments: bool = False,
     limit: int = 15,
 ) -> dict[str, Any]:
     """Search what real people said, in their own words, across Hacker News,
@@ -66,12 +67,23 @@ async def search_community(
     Args:
         question: plain-language question or keywords.
         platforms: subset of ["hn", "reddit", "x"]. Default: all configured.
-        subreddits: restrict Reddit to these, e.g. ["running", "hyrox"].
+        subreddits: REQUIRED for Reddit -- the archive has no global full-text
+            search, only within a subreddit. Reddit is skipped with a clear
+            reason if omitted.
+            ⚠ Pass ONE subreddit per call. The archive is a free service that
+            sustains roughly one search per 30-60s; a call naming several
+            subreddits searches only the first and says so. To cover
+            r/running, r/hyrox and r/Garmin, make three separate calls and
+            expect each to take 10-20s. Batching them returns nothing.
         since/until: "YYYY-MM-DD" bounds.
         min_points: HN score floor -- use ~50 to cut noise on broad topics.
         min_faves: X like floor. Worth setting: X bills per page whether the
             tweets are useful or not, so filtering junk up front is the main
             lever on cost. ~10 for niche topics, ~100 for busy ones.
+        include_comments: also search reply bodies, not just posts/stories.
+            Slower and noisier, but where complaints actually live -- the
+            first-person "this plan wrecked my knee" account is a reply, not
+            a thread title.
         limit: how many results to SHOW per provider. Everything retrieved is
             stored in the corpus regardless -- this only trims the reply.
     """
@@ -80,6 +92,7 @@ async def search_community(
         chosen, question,
         limit_per=limit, since=since, until=until,
         subreddits=subreddits, min_points=min_points, min_faves=min_faves,
+        include_comments=include_comments,
     )
     corpus.record(tool="search_community", question=question, queries=res.queries,
                   providers=res.providers, results=res.results)
@@ -149,7 +162,6 @@ async def providers_status() -> dict[str, Any]:
 
 def _needs(name: str) -> str:
     return {
-        "reddit": "REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET (app must be approved by Reddit)",
         "x": "X_API_KEY (twitterapi.io or equivalent)",
         "tavily": "TAVILY_API_KEY (1,000 free credits/month)",
     }.get(name, "")

@@ -1,21 +1,27 @@
-"""Reddit via the official Data API.
+"""Reddit via Arctic Shift -- the Pushshift successor.
 
-Free for non-commercial use at 100 QPM with OAuth (10 without), averaged over a
-rolling 10-minute window -- generous enough for real complaint mining.
+The official route is closed. Self-service app creation now returns a link to
+the Responsible Builder Policy instead of credentials, unauthenticated .json
+endpoints 403, and approval is a ticket with an uncertain outcome that reportedly
+skews against small projects.
 
-The gate is registration, not rate: Reddit's Responsible Builder Policy closed
-self-service app creation in late 2025, so every OAuth client is manually
-approved and silent rejection happens. Register at
-https://www.reddit.com/prefs/apps (type: script) before relying on this.
+Web search doesn't substitute either: Reddit's robots.txt blocks every crawler
+except Google's (a $60M licensing deal), so Bing, DuckDuckGo and the AI search
+APIs built on them see nothing. Tavily scoped to reddit.com returns subreddit
+landing pages regardless of the query -- verified 2026-09-19.
 
-Why it matters despite the hassle: this is unmediated user language. A web
-search scoped to reddit.com returns the threads that *rank*; this returns the
-threads that *exist*, comments included.
+Arctic Shift serves the same archive as the bulk dumps over plain
+unauthenticated HTTP: 2005 to present, no key, no registration, no approval.
+
+Its one real limitation is that keyword parameters only work alongside an
+author or subreddit -- there is no global full-text search. For complaint
+mining that costs nothing, since the question is always "what do people in
+r/running say", never "search all of Reddit".
 """
 
 from __future__ import annotations
 
-import os
+import asyncio
 import time
 from datetime import datetime, timezone
 
@@ -23,39 +29,47 @@ import httpx
 
 from .base import COMMUNITY, Provider, ProviderError, Result
 
-TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
-API = "https://oauth.reddit.com"
-UA = os.environ.get("REDDIT_USER_AGENT", "research-mcp/0.1 (personal research tool)")
+API = "https://arctic-shift.photon-reddit.com/api"
+
+# Measured 2026-09-19, not taken from the docs: the published "~2 req/s" trips
+# a 429 almost immediately and then leaves the endpoint answering 422 for a
+# while afterwards. At a 3s gap it is stable. Keyword search on a busy
+# subreddit is genuinely slow too -- 6-8s server-side is normal, occasionally
+# instant when cached.
+#
+# The limiter is module-level because the router fans out concurrently; a
+# per-instance one would let parallel calls trip the limit together.
+_MIN_INTERVAL = 5.0
+
+# ONE request per call. Measured: a single keyword search takes 8-18s including
+# retries, and a second immediately afterwards is refused. Arctic Shift is a
+# free community service running full-text queries over a 20-year archive --
+# roughly one search per 30-60s is what it actually sustains.
+#
+# So Reddit cannot join interactive fan-out the way HN and X do. Two requests
+# would exceed the ~30s budget Claude Code allows a tool and return nothing at
+# all. The right usage is several narrow calls spaced out, one subreddit at a
+# time, which the tool description tells the caller to do.
+_MAX_REQUESTS = 1
+_lock = asyncio.Lock()
+_last = 0.0
+
+
+async def _throttle() -> None:
+    global _last
+    async with _lock:
+        wait = _MIN_INTERVAL - (time.monotonic() - _last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last = time.monotonic()
 
 
 class Reddit(Provider):
     name = "reddit"
     source_class = COMMUNITY
 
-    def __init__(self) -> None:
-        self._id = os.environ.get("REDDIT_CLIENT_ID")
-        self._secret = os.environ.get("REDDIT_CLIENT_SECRET")
-        self._token: str | None = None
-        self._expires = 0.0
-
     def available(self) -> bool:
-        return bool(self._id and self._secret)
-
-    async def _auth(self, client: httpx.AsyncClient) -> str:
-        if self._token and time.time() < self._expires - 60:
-            return self._token
-        r = await client.post(
-            TOKEN_URL,
-            data={"grant_type": "client_credentials"},
-            auth=(self._id or "", self._secret or ""),
-            headers={"User-Agent": UA},
-        )
-        if r.status_code != 200:
-            raise ProviderError(f"reddit auth {r.status_code}: {r.text[:200]}")
-        d = r.json()
-        self._token = d["access_token"]
-        self._expires = time.time() + d.get("expires_in", 3600)
-        return self._token
+        return True  # no credentials, no approval
 
     async def search(
         self,
@@ -65,62 +79,158 @@ class Reddit(Provider):
         since: str | None = None,
         until: str | None = None,
         subreddits: list[str] | None = None,
-        sort: str = "relevance",     # relevance | hot | top | new | comments
-        time_filter: str = "all",    # hour | day | week | month | year | all
+        include_comments: bool = False,
     ) -> list[Result]:
-        async with httpx.AsyncClient(timeout=25) as client:
-            token = await self._auth(client)
-            headers = {"Authorization": f"bearer {token}", "User-Agent": UA}
+        if not subreddits:
+            # Not a failure of ours -- state the constraint plainly so the
+            # caller can fix the call rather than conclude Reddit is empty.
+            raise ProviderError(
+                "reddit (arctic-shift) has no global full-text search: pass "
+                "subreddits, e.g. ['running','hyrox','Garmin']"
+            )
 
-            paths = [f"/r/{'+'.join(subreddits)}/search"] if subreddits else ["/search"]
-            params = {
-                "q": query,
-                "limit": min(limit, 100),
-                "sort": sort,
-                "t": time_filter,
-                "type": "link",
-                "raw_json": 1,
-            }
-            if subreddits:
-                params["restrict_sr"] = 1
+        kinds = ["posts", "comments"] if include_comments else ["posts"]
 
-            out: list[Result] = []
-            for path in paths:
-                try:
-                    r = await client.get(API + path, params=params, headers=headers)
-                    r.raise_for_status()
-                except httpx.HTTPError as e:
-                    raise ProviderError(f"reddit: {e}") from e
-                for child in r.json().get("data", {}).get("children", []):
-                    d = child.get("data", {})
-                    created = d.get("created_utc")
-                    published = (
-                        datetime.fromtimestamp(created, tz=timezone.utc) if created else None
-                    )
-                    # Client-side date bounds: the search endpoint has no since/until.
-                    if published and _out_of_range(published, since, until):
+        plan = [(sub, k) for sub in subreddits for k in kinds]
+        skipped = plan[_MAX_REQUESTS:]
+        plan = plan[:_MAX_REQUESTS]
+
+        out: list[Result] = []
+
+        async with httpx.AsyncClient(
+            timeout=40, follow_redirects=True,
+            headers={"User-Agent": "research-mcp/0.1 (personal research tool)"},
+        ) as client:
+            for sub, k in plan:
+                params: dict[str, object] = {
+                    "subreddit": sub,
+                    "limit": min(limit, 100),
+                    # keyword field differs by endpoint: posts take `query`
+                    # (title + selftext), comments take `body`
+                    ("body" if k == "comments" else "query"): query,
+                }
+                if since:
+                    params["after"] = since
+                if until:
+                    params["before"] = until
+
+                data = await self._get(client, f"{API}/{k}/search", params)
+                for item in data:
+                    r = _to_result(item, k, query)
+                    if _is_empty(r):
                         continue
-                    out.append(
-                        Result(
-                            source=self.name,
-                            source_class=self.source_class,
-                            title=d.get("title", ""),
-                            url="https://www.reddit.com" + d.get("permalink", ""),
-                            text=d.get("selftext", "") or "",
-                            author=d.get("author"),
-                            published_at=published,
-                            score=d.get("score"),
-                            comments=d.get("num_comments"),
-                            query=query,
-                            raw={"subreddit": d.get("subreddit"), "flair": d.get("link_flair_text")},
-                        )
-                    )
-            return out
+                    out.append(r)
+
+        if skipped:
+            # Partial coverage must be visible: silently searching 2 of 4
+            # subreddits and reporting a clean result is how you conclude
+            # nobody complains about something.
+            raise _Truncated(out, skipped)
+        return out
+
+    async def comment_tree(self, post_id: str, limit: int = 500) -> list[Result]:
+        """Full discussion under one post (server caps at 25k comments).
+
+        The highest-signal call for complaint mining: a single thread titled
+        "anyone else getting injured on this plan?" carries hundreds of
+        first-person accounts that keyword search never surfaces individually.
+        """
+        async with httpx.AsyncClient(
+            timeout=60, follow_redirects=True,
+            headers={"User-Agent": "research-mcp/0.1 (personal research tool)"},
+        ) as client:
+            data = await self._get(client, f"{API}/comments/tree",
+                                   {"link_id": post_id, "limit": limit})
+        return [_to_result(c, "comments", f"tree:{post_id}") for c in data]
+
+    async def _get(self, client: httpx.AsyncClient, url: str,
+                   params: dict[str, object]) -> list[dict]:
+        for attempt in range(3):
+            await _throttle()
+            try:
+                r = await client.get(url, params=params)
+            except httpx.HTTPError as e:
+                raise ProviderError(f"reddit/arctic-shift: {e}") from e
+
+            if r.status_code == 200:
+                d = r.json()
+                return d.get("data") or [] if isinstance(d, dict) else (d or [])
+            # 422 here means "slow down", not "bad request" -- back off rather
+            # than reporting an empty subreddit.
+            # 422 "Timeout. Maybe slow down a bit" and 429 are both throttle
+            # states here, not bad requests -- and they persist for a few
+            # seconds after being tripped. Back off hard; reporting an empty
+            # subreddit would read as "nobody discusses this".
+            if r.status_code in (422, 429) and attempt < 2:
+                await asyncio.sleep(4.0 * (attempt + 1))
+                continue
+            raise ProviderError(
+                f"reddit/arctic-shift {r.status_code}: {r.text[:160]}"
+            )
+        return []
 
 
-def _out_of_range(dt: datetime, since: str | None, until: str | None) -> bool:
-    if since and dt < datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc):
+# Explicit tombstones only. An EMPTY body is not dead: a link post legitimately
+# has no selftext, and treating "" as removed would silently discard exactly
+# the posts that share an article -- often the most useful ones.
+_TOMBSTONE = {"[removed]", "[deleted]", "[removed by reddit]"}
+
+
+def _is_empty(r: Result) -> bool:
+    """Drop rows whose content the archive kept only as a tombstone.
+
+    Removal leaves the row in place with the body replaced by "[removed]".
+    Those cost tokens, sit in the corpus forever, and can make a subreddit look
+    like it actively discusses something that was in fact moderated away. The
+    title survives, but a title without its body is not a complaint -- and for
+    mining what people actually said, the body IS the data.
+    """
+    body = (r.text or "").strip().lower()
+    if body in _TOMBSTONE:
         return True
-    if until and dt > datetime.strptime(until, "%Y-%m-%d").replace(tzinfo=timezone.utc):
-        return True
-    return False
+    # A comment with no body at all is pure noise; a post without selftext may
+    # still be a link post worth keeping.
+    return r.raw.get("kind") == "comments" and not body
+
+
+class _Truncated(Exception):
+    """Results plus the subreddit/kind pairs left unsearched. Router unwraps
+    this: partial coverage is a caveat on the answer, not a failure."""
+
+    def __init__(self, results: list[Result], skipped: list[tuple[str, str]]) -> None:
+        self.results = results
+        self.skipped = skipped
+        super().__init__(
+            f"request budget reached; not searched: "
+            + ", ".join(f"r/{s} {k}" for s, k in skipped)
+        )
+
+
+def _to_result(item: dict, kind: str, query: str) -> Result:
+    created = item.get("created_utc")
+    sub = item.get("subreddit")
+    if kind == "comments":
+        title = f"comment in r/{sub}"
+        text = item.get("body", "") or ""
+        link = item.get("link_id", "").replace("t3_", "")
+        url = f"https://reddit.com/comments/{link}/_/{item.get('id','')}" if link else ""
+    else:
+        title = item.get("title", "") or ""
+        text = item.get("selftext", "") or ""
+        url = item.get("url") or f"https://reddit.com/comments/{item.get('id','')}"
+
+    return Result(
+        source="reddit",
+        source_class=COMMUNITY,
+        title=title,
+        url=url,
+        text=text,
+        author=item.get("author"),
+        published_at=(
+            datetime.fromtimestamp(created, tz=timezone.utc) if created else None
+        ),
+        score=item.get("score"),
+        comments=item.get("num_comments"),
+        query=query,
+        raw={"subreddit": sub, "kind": kind},
+    )

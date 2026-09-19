@@ -104,26 +104,27 @@ npx @modelcontextprotocol/inspector uv --directory ~/research-mcp run research-m
 - **Tavily** — free key at app.tavily.com, no card. Advanced depth costs more
   than one credit, so a fanned-out pass burns the tier faster than the headline
   1,000 suggests: budget ~20–30 real research tasks/month.
-- **Reddit** — ⛔ **currently unreachable.** Self-service app creation is closed
-  under the Responsible Builder Policy (create app returns a policy link, not
-  credentials), and unauthenticated `.json` endpoints return 403. Two things
-  that do NOT work as substitutes, both verified 2026-09-19:
-  - Tavily scoped to `reddit.com` returns subreddit *landing pages*
-    (r/nfl, r/nsfw, r/deathbattle) regardless of query — Reddit blocks crawlers,
-    so no web index holds thread content.
-  - Tavily also **silently drops `include_domains`** when nothing matches on the
-    domain, returning unrelated off-domain results with no flag. Enforced
-    client-side now; discards are reported in provider stats.
+- **Reddit** — via **Arctic Shift** (the Pushshift successor): free,
+  unauthenticated, 2005→present, no key and no approval.
+  - The official API is closed: self-service app creation returns a link to the
+    Responsible Builder Policy instead of credentials, unauthenticated `.json`
+    endpoints 403, and approval is a ticket that reportedly skews against small
+    projects.
+  - Web search is not a substitute. Reddit's robots.txt blocks every crawler
+    except Google's ($60M licensing deal), so Bing, DuckDuckGo and the AI search
+    APIs built on them see nothing. Tavily scoped to `reddit.com` returns
+    subreddit landing pages regardless of query — verified 2026-09-19.
+  - ⚠ **Slow and heavily throttled.** Measured, not from the docs: the published
+    "~2 req/s" trips a 429 immediately and leaves the endpoint answering 422 for
+    a while after. One keyword search takes 8–18s including retries, and a
+    second straight after is refused. It sustains roughly **one search per
+    30–60s**. So Reddit cannot join interactive fan-out — the provider caps
+    itself at one request per call and reports what it did not search.
+  - No global full-text search: keyword params require a subreddit scope. Costs
+    nothing here, since complaint mining is always "what does r/running say".
+  - `comments/tree` pulls a full discussion (up to 25k comments) — the highest
+    signal call, since first-person complaints are replies, not thread titles.
 
-  Complaint mining without Reddit: unfiltered web search surfaces Trustpilot,
-  app-store reviews and review blogs, which carry the same 1-star language and
-  are actually crawlable.
-
-  Original terms, if access is ever granted: free for non-commercial (100 QPM
-  with OAuth). ⚠ Self-service
-  registration closed in late 2025; every app is **manually approved and can be
-  silently rejected**. Register a `script` app at reddit.com/prefs/apps early —
-  this is the long pole.
 - **X** — the official API has no free tier ($0.005/read, **7-day search
   window**; full archive is Enterprise at $42K+/mo). twitterapi.io gives the
   full archive with no gate.
