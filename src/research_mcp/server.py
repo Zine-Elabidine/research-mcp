@@ -10,13 +10,16 @@ on -- so they say when to reach for each tool, not just what it wraps.
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer
 
-load_dotenv()
+# Explicit path, not find_dotenv(): the server is launched by Claude Code with
+# an arbitrary cwd, and find_dotenv() walks the call stack -- which fails
+# outright under some entry points. Repo root is two levels up from this file.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from .corpus import Corpus                                   # noqa: E402
 from .providers import HackerNews, Reddit, Tavily, X         # noqa: E402

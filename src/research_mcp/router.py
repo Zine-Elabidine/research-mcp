@@ -104,6 +104,15 @@ async def fan_out(
                 providers=stats, skipped=skipped)
 
 
+def _title_key(title: str) -> str:
+    """Normalised title for near-duplicate detection. Empty for titles too
+    short or generic to be a safe signal (X results titled '@handle')."""
+    import re
+    t = re.sub(r"[^a-z0-9 ]", " ", (title or "").lower())
+    t = " ".join(t.split())
+    return t[:80] if len(t) >= 20 else ""
+
+
 def _interleave(by_provider: dict[str, list[Result]]) -> list[Result]:
     """Round-robin across providers, deduping as we go.
 
@@ -113,16 +122,20 @@ def _interleave(by_provider: dict[str, list[Result]]) -> list[Result]:
     whichever source is chattiest.
     """
     # Dedup within each provider first, preserving its own ordering.
-    seen_local: dict[str, set[str]] = {}
+    # Two keys, because URL alone is not enough: syndicated articles reappear
+    # under different URLs with an identical title, and a web provider queried
+    # with several phrasings will happily return the same piece twice.
     for name, items in by_provider.items():
-        keep, seen = [], set()
+        keep, seen_fp, seen_title = [], set(), set()
         for r in items:
-            if r.fingerprint in seen:
+            tkey = _title_key(r.title)
+            if r.fingerprint in seen_fp or (tkey and tkey in seen_title):
                 continue
-            seen.add(r.fingerprint)
+            seen_fp.add(r.fingerprint)
+            if tkey:
+                seen_title.add(tkey)
             keep.append(r)
         by_provider[name] = keep
-        seen_local[name] = seen
 
     out: list[Result] = []
     index: dict[str, Result] = {}

@@ -45,7 +45,17 @@ class Result:
         so normalise before hashing.
         """
         if self.url:
-            basis = self.url.split("?")[0].rstrip("/").lower()
+            basis = self.url.split("?")[0].split("#")[0].rstrip("/").lower()
+            # Host aliases and mobile/AMP prefixes hide real cross-source
+            # corroboration: an HN story linking twitter.com/... and an X
+            # result at x.com/... are the same artifact seen from two classes,
+            # which is precisely the signal worth surfacing.
+            for a, b in (("//twitter.com/", "//x.com/"),
+                         ("//mobile.twitter.com/", "//x.com/"),
+                         ("//www.reddit.com/", "//reddit.com/"),
+                         ("//old.reddit.com/", "//reddit.com/"),
+                         ("//m.", "//"), ("//www.", "//")):
+                basis = basis.replace(a, b)
         else:
             basis = f"{self.source}:{self.title}:{self.text[:200]}".lower()
         return hashlib.sha256(basis.encode()).hexdigest()[:16]
@@ -77,6 +87,12 @@ class Result:
             out["score"] = self.score
         if self.comments is not None:
             out["comments"] = self.comments
+        # A provider that had to widen the query must say so. Otherwise a loose
+        # match reads as a direct hit, and broadening quietly becomes a way of
+        # manufacturing evidence for a question nobody actually discussed.
+        if orig := self.raw.get("_broadened_from"):
+            out["matched_on"] = self.query
+            out["note"] = f"no match for the full question; broadened from: {orig!r}"
         return out
 
 

@@ -58,6 +58,7 @@ class HackerNews(Provider):
         if min_points is not None:
             numeric.append(f"points>={min_points}")
 
+        matched_on: str | None = None
         params = {
             "query": query,
             "tags": tags,
@@ -73,6 +74,25 @@ class HackerNews(Provider):
             r = await client.get(f"{API}/{endpoint}", params=params)
             r.raise_for_status()
             hits = r.json().get("hits", [])
+
+            # Algolia does keyword matching and ANDs every term, so a full
+            # natural-language question matches nothing and comes back empty --
+            # indistinguishable from "no such discussion exists". Silent zero is
+            # exactly the failure this tool exists to prevent, so narrow
+            # progressively until something matches. Four content words is still
+            # usually too strict; two is where recall actually appears.
+            for n in (4, 3, 2):
+                if hits:
+                    break
+                kw = _keywords(query, keep=n)
+                if not kw or kw == params["query"]:
+                    continue
+                params["query"] = kw
+                r = await client.get(f"{API}/{endpoint}", params=params)
+                r.raise_for_status()
+                hits = r.json().get("hits", [])
+                if hits:
+                    matched_on = kw
         except httpx.HTTPError as e:
             raise ProviderError(f"hn: {e}") from e
         finally:
@@ -97,11 +117,36 @@ class HackerNews(Provider):
                     published_at=datetime.fromisoformat(created) if created else None,
                     score=h.get("points"),
                     comments=h.get("num_comments"),
-                    query=query,
-                    raw=h,
+                    query=matched_on or query,
+                    raw={**h, "_broadened_from": query} if matched_on else h,
                 )
             )
         return out
+
+
+_STOP = {
+    "a","an","and","are","as","at","be","but","by","can","do","does","for","from",
+    "how","i","in","is","it","its","of","on","or","that","the","their","them",
+    "they","this","to","was","what","when","where","which","who","why","will",
+    "with","you","your","vs","about","should","would","could","there","than",
+}
+
+
+def _keywords(q: str, keep: int = 4) -> str:
+    """Reduce a question to its content words, longest first.
+
+    Deliberately crude -- the point is a second attempt that can match, not a
+    good query. Longest-first is a cheap proxy for specificity: "profitable"
+    and "wrapper" beat "startups" as discriminators.
+    """
+    import re
+    words = re.findall(r"[A-Za-z0-9+#.-]{2,}", q)
+    content = [w for w in words if w.lower() not in _STOP]
+    if not content:
+        return ""
+    ranked = sorted(dict.fromkeys(content), key=lambda w: (-len(w), content.index(w)))
+    chosen = ranked[:keep]
+    return " ".join(sorted(chosen, key=content.index))
 
 
 def _strip(html: str) -> str:
