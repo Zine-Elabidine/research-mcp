@@ -108,10 +108,13 @@ npx @modelcontextprotocol/inspector uv --directory ~/research-mcp run research-m
   registration closed in late 2025; every app is **manually approved and can be
   silently rejected**. Register a `script` app at reddit.com/prefs/apps early —
   this is the long pole.
-- **X** — billing is per PAGE (~20 tweets, ~300 credits observed 2026-09-19),
-  not per result, so `limit` only trims what Claude is shown — everything
-  fetched is stored. Use `min_faves` to avoid paying for junk: it's the main
-  cost lever. No free tier officially ($0.005/read, 7-day window; full archive is
+- **X** — 100,000 credits = $1; 15 credits per tweet (min 15/call). Billing is
+  per PAGE (~20 tweets ≈ 300 credits ≈ **$0.003**), not per result, so `limit`
+  only trims what Claude is shown — everything fetched is stored. $1 ≈ 6,600
+  tweets, so cost is effectively a rounding error; `min_faves` is for result
+  quality, not budget. Free tier is rate-limited to 0.2 QPS (1 request per 5s),
+  which *will* matter once several queries run concurrently.
+  No free tier officially ($0.005/read, 7-day window; full archive is
   Enterprise at $42K+/mo). twitterapi.io gives the full archive for $0.15/1k with
   no gate. Legally split: hiQ v. LinkedIn means scraping public data isn't a CFAA
   violation, but it does breach X's ToS — fine for personal tooling, revisit
