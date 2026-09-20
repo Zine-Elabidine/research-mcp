@@ -211,7 +211,10 @@ class Reddit(Provider):
         ) as client:
             data = await self._get(client, f"{API}/comments/tree",
                                    {"link_id": post_id, "limit": limit})
-        return [_to_result(c, "comments", f"tree:{post_id}") for c in data]
+        return [
+            _to_result(c, "comments", f"tree:{post_id}")
+            for c in _flatten(data)
+        ]
 
     async def _get(self, client: httpx.AsyncClient, url: str,
                    params: dict[str, object], *, light: bool = False) -> list[dict]:
@@ -261,6 +264,37 @@ def _is_empty(r: Result) -> bool:
     # A comment with no body at all is pure noise; a post without selftext may
     # still be a link post worth keeping.
     return r.raw.get("kind") == "comments" and not body
+
+
+def _flatten(nodes: object, depth: int = 0) -> list[dict]:
+    """Unwrap Reddit's comment tree into a flat list.
+
+    /comments/tree returns the raw Reddit shape -- {"kind": "t1", "data": {...}}
+    with replies nested under data.replies, itself wrapped in
+    {"data": {"children": [...]}}. The flat /comments/search endpoint returns
+    bare comment objects instead, so the two need different handling.
+
+    Depth is kept because it is real signal: a deep reply is usually someone
+    answering a specific follow-up, which is where the detail lives.
+    """
+    out: list[dict] = []
+    if isinstance(nodes, dict):
+        nodes = nodes.get("children") or nodes.get("data") or []
+    if not isinstance(nodes, list):
+        return out
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        body = node.get("data") if node.get("kind") else node
+        if not isinstance(body, dict):
+            continue
+        replies = body.pop("replies", None)
+        if body.get("body"):
+            body["_depth"] = depth
+            out.append(body)
+        if replies:
+            out.extend(_flatten(replies, depth + 1))
+    return out
 
 
 def _matches(r: Result, query: str) -> bool:
@@ -320,5 +354,5 @@ def _to_result(item: dict, kind: str, query: str) -> Result:
         score=item.get("score"),
         comments=item.get("num_comments"),
         query=query,
-        raw={"subreddit": sub, "kind": kind},
+        raw={"subreddit": sub, "kind": kind, "depth": item.get("_depth")},
     )

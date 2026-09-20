@@ -142,6 +142,58 @@ async def search_web(
 
 
 @mcp.tool()
+async def read_discussion(
+    post_url_or_id: str,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Read the FULL comment thread under one Reddit post.
+
+    This is the highest-signal call for complaint mining, and the natural
+    follow-up to search_community. Posts are the question; comments are the
+    answer. A thread titled "non stop injuries from training" carries dozens of
+    first-person accounts -- what the injury was, what plan caused it, what
+    people did instead -- none of which keyword search surfaces individually,
+    because each one is a reply, not a title.
+
+    One request, up to 25k comments, no keyword matching involved. Prefer this
+    over include_comments: searching comment bodies is the slow throttled path
+    and returns fragments without the thread context that makes them readable.
+
+    Args:
+        post_url_or_id: a reddit.com/r/.../comments/<id>/... URL, or the bare id.
+        limit: max comments to retrieve.
+    """
+    pid = _post_id(post_url_or_id)
+    try:
+        results = await REDDIT.comment_tree(pid, limit=limit)
+    except Exception as e:  # noqa: BLE001 - report, never raise through MCP
+        return {"post": pid, "error": f"{type(e).__name__}: {e}", "count": 0, "results": []}
+
+    corpus.record(tool="read_discussion", question=f"thread:{pid}",
+                  queries=[pid], providers={"reddit": len(results)}, results=results)
+
+    # Deepest signal sits in the longest replies, not the top-voted ones --
+    # scores on a young thread mean little, but a 400-character answer is
+    # someone recounting what actually happened to them.
+    ranked = sorted(results, key=lambda r: len(r.text or ""), reverse=True)
+    return {
+        "post": pid,
+        "count": len(results),
+        "results": [r.to_model(max_text=900) for r in ranked[:60]],
+        "note": ("ranked by reply length, not score: a young thread has no "
+                 "settled votes, and long replies are first-person accounts"),
+    }
+
+
+def _post_id(s: str) -> str:
+    """Accept a full permalink or a bare id."""
+    s = s.strip().rstrip("/")
+    if "/comments/" in s:
+        return s.split("/comments/")[1].split("/")[0]
+    return s.rsplit("/", 1)[-1].replace("t3_", "")
+
+
+@mcp.tool()
 async def corpus_stats() -> dict[str, Any]:
     """Report what the local research corpus has accumulated: how many results
     and searches are stored, the spread across source classes, and the date

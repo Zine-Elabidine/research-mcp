@@ -76,6 +76,7 @@ yours if a provider disappears.
 |---|---|
 | `search_community` | complaints, lived experience, launch reception, hiring demand |
 | `search_web` | published claims, articles, docs — the consensus layer |
+| `read_discussion` | the full comment thread under one Reddit post |
 | `corpus_stats` | how much history has accumulated |
 | `providers_status` | which sources are live vs missing credentials |
 
@@ -129,8 +130,10 @@ npx @modelcontextprotocol/inspector uv --directory ~/research-mcp run research-m
     itself at one request per call and reports what it did not search.
   - No global full-text search: keyword params require a subreddit scope. Costs
     nothing here, since complaint mining is always "what does r/running say".
-  - `comments/tree` pulls a full discussion (up to 25k comments) — the highest
-    signal call, since first-person complaints are replies, not thread titles.
+  - `read_discussion` pulls a full thread (up to 25k comments) in ONE request —
+    the highest-signal call, since first-person complaints are replies, not
+    thread titles. Prefer it over `include_comments`, which searches comment
+    bodies on the slow throttled path and returns fragments without context.
 
 - **X** — the official API has no free tier ($0.005/read, **7-day search
   window**; full archive is Enterprise at $42K+/mo). twitterapi.io gives the
