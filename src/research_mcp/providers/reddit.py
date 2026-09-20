@@ -59,7 +59,13 @@ _MAX_REQUESTS = 1
 # is both faster and more complete -- it covers everything in the window rather
 # than whatever the archive's relevance ranking decides to surface.
 _PAGE = 100
-_MAX_PAGES = 12
+# 12 pages = 1200 posts. That is a COMPLETE window for a small sub (r/hyrox ran
+# ~760 posts in five weeks) but silently truncates a busy one -- r/Entrepreneur
+# burns 1200 posts in under three weeks, so a "since January" browse quietly
+# returned only the last fortnight. Raised, and browse() now reports whether it
+# reached `since` or hit the cap, because a truncated window that looks
+# complete is how you conclude a topic is not discussed.
+_MAX_PAGES = 40
 _lock = asyncio.Lock()
 _last = 0.0
 
@@ -76,6 +82,8 @@ async def _throttle(interval: float = _MIN_INTERVAL) -> None:
 class Reddit(Provider):
     name = "reddit"
     source_class = COMMUNITY
+
+    last_browse_truncated: tuple[str, object] | None = None
 
     def available(self) -> bool:
         return True  # no credentials, no approval
@@ -203,6 +211,12 @@ class Reddit(Provider):
                 before = datetime.fromtimestamp(oldest - 1, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
                 if len(page) < _PAGE:
                     break
+            else:
+                # Loop finished without break => we exhausted max_pages and the
+                # window is NOT complete back to `since`.
+                if out:
+                    oldest_seen = min(r.published_at for r in out if r.published_at)
+                    self.last_browse_truncated = (subreddit, oldest_seen)
         return out
 
     async def comment_tree(self, post_id: str, limit: int = 500) -> list[Result]:
