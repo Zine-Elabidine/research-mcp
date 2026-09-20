@@ -90,6 +90,9 @@ class Result:
         # A provider that had to widen the query must say so. Otherwise a loose
         # match reads as a direct hit, and broadening quietly becomes a way of
         # manufacturing evidence for a question nobody actually discussed.
+        for k in ("budget", "bids", "skills", "stars_per_month", "language"):
+            if (v := self.raw.get(k)) not in (None, "", []):
+                out[k] = v
         if self.raw.get("body_removed"):
             out["note"] = ("body auto-removed by the subreddit before archiving; "
                            "title only -- use read_discussion for the content")

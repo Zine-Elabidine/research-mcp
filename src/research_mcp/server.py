@@ -22,7 +22,7 @@ from mcp.server.mcpserver import MCPServer
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from .corpus import Corpus                                   # noqa: E402
-from .providers import HackerNews, Reddit, Tavily, X         # noqa: E402
+from .providers import Gigs, GitHub, HackerNews, Reddit, Tavily, X         # noqa: E402
 from .router import fan_out                                  # noqa: E402
 
 mcp = MCPServer(
@@ -37,6 +37,7 @@ mcp = MCPServer(
 corpus = Corpus()
 
 HN, REDDIT, XP, TAVILY = HackerNews(), Reddit(), X(), Tavily()
+GIGS, GH = Gigs(), GitHub()
 COMMUNITY_PROVIDERS = {"hn": HN, "reddit": REDDIT, "x": XP}
 
 
@@ -194,6 +195,49 @@ def _post_id(s: str) -> str:
 
 
 @mcp.tool()
+async def search_demand(
+    question: str,
+    since: str | None = None,
+    min_bids: int | None = None,
+    min_stars: int | None = None,
+    limit: int = 12,
+) -> dict[str, Any]:
+    """Find where money and effort are ALREADY moving on a problem.
+
+    This is the structured-evidence layer, and the strongest one for judging a
+    business idea. Two sources, two different proofs:
+
+    - **Freelance gigs** (Freelancer.com): somebody is paying a human,
+      repeatedly, to do something by hand. Each result carries a budget and a
+      bid count, so it answers "do they pay" and "how much" without asking
+      anyone. The same job posted over and over is a product waiting to exist.
+    - **GitHub**: an engineer scratching their own itch in public is a
+      workaround artifact, and stars are other people saying "me too".
+      `stars_per_month` matters more than total stars -- a 200-star repo from
+      2019 is history, the same from last month is a live unmet need.
+
+    Use this BEFORE search_web on any business question. Published articles
+    describe markets; this shows transactions. Pair with search_community for
+    the complaint in users' own words.
+
+    Args:
+        question: the problem or domain, in keywords.
+        since: "YYYY-MM-DD" — for GitHub this filters repo CREATION date.
+        min_bids: ignore gigs below this many bidders (weak demand).
+        min_stars: ignore repos below this star count.
+        limit: results per source.
+    """
+    res = await fan_out(
+        [GIGS, GH], question,
+        limit_per=limit, since=since,
+        min_bids=min_bids, min_stars=min_stars,
+    )
+    corpus.record(tool="search_demand", question=question, queries=res.queries,
+                  providers=res.providers, results=res.results)
+    return res.to_model(max_shown=limit)
+
+
+@mcp.tool()
 async def corpus_stats() -> dict[str, Any]:
     """Report what the local research corpus has accumulated: how many results
     and searches are stored, the spread across source classes, and the date
@@ -207,7 +251,7 @@ async def providers_status() -> dict[str, Any]:
     """List every configured source, its class, and whether credentials are
     present. Call this when results look thin -- a missing key means a whole
     source class is silently absent from every search."""
-    allp = [HN, REDDIT, XP, TAVILY]
+    allp = [HN, REDDIT, XP, TAVILY, GIGS, GH]
     rows = [
         {"name": p.name, "class": p.source_class,
          "available": p.available(),
@@ -225,6 +269,7 @@ def _needs(name: str) -> str:
     return {
         "x": "X_API_KEY (twitterapi.io or equivalent)",
         "tavily": "TAVILY_API_KEY (1,000 free credits/month)",
+        "github": "works unauthenticated at 10 req/min; GITHUB_TOKEN raises it to 30",
     }.get(name, "")
 
 
