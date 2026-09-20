@@ -106,7 +106,14 @@ class Reddit(Provider):
         # window, not about the best-known threads in it.
         if since and not include_comments:
             posts = await self.browse(subreddits[0], since=since, until=until)
-            hits = [r for r in posts if _matches(r, query)] if query else posts
+            if query:
+                scored = [(_relevance(r, query), r) for r in posts]
+                hits = [r for sc, r in sorted(
+                    ((sc, r) for sc, r in scored if sc > 0),
+                    key=lambda p: (-p[0], -(p[1].score or 0)),
+                )]
+            else:
+                hits = posts
             if len(subreddits) > 1:
                 raise _Truncated(hits[:limit] if limit else hits,
                                  [(s, "posts") for s in subreddits[1:]])
@@ -211,10 +218,8 @@ class Reddit(Provider):
         ) as client:
             data = await self._get(client, f"{API}/comments/tree",
                                    {"link_id": post_id, "limit": limit})
-        return [
-            _to_result(c, "comments", f"tree:{post_id}")
-            for c in _flatten(data)
-        ]
+        out = [_to_result(c, "comments", f"tree:{post_id}") for c in _flatten(data)]
+        return [r for r in out if not _is_empty(r)]
 
     async def _get(self, client: httpx.AsyncClient, url: str,
                    params: dict[str, object], *, light: bool = False) -> list[dict]:
@@ -249,6 +254,17 @@ class Reddit(Provider):
 _TOMBSTONE = {"[removed]", "[deleted]", "[removed by reddit]"}
 
 
+# Reddit's automated accounts. Their comments are boilerplate that shows up in
+# every thread and crowds out real replies in a length-ranked list.
+_BOTS = {"automoderator", "read-the-rules", "sneakpeekbot", "remindmebot",
+         "totesmessenger", "wikitextbot", "b0trank", "converter-bot"}
+
+
+def _is_bot(author: str | None) -> bool:
+    a = (author or "").lower()
+    return a in _BOTS or a.endswith("-bot") or a.endswith("_bot")
+
+
 def _is_empty(r: Result) -> bool:
     """Drop rows whose content the archive kept only as a tombstone.
 
@@ -258,6 +274,8 @@ def _is_empty(r: Result) -> bool:
     title survives, but a title without its body is not a complaint -- and for
     mining what people actually said, the body IS the data.
     """
+    if _is_bot(r.author):
+        return True
     body = (r.text or "").strip().lower()
     if body in _TOMBSTONE:
         return True
@@ -297,19 +315,35 @@ def _flatten(nodes: object, depth: int = 0) -> list[dict]:
     return out
 
 
-def _matches(r: Result, query: str) -> bool:
-    """Whole-word match over title + body.
+def _relevance(r: Result, query: str) -> int:
+    """How many of the query's content words appear in title + body.
 
-    Substring matching looked fine and was not: it pulled "SLC female partner
-    needed" into an injury search. Word boundaries with a light plural/suffix
-    allowance keep recall without that.
+    RANK, don't filter. Matching ANY term was useless -- "training plan app
+    injury adapt recovery" matched every post in r/running, because "training"
+    is in all of them. But requiring a majority threw out the two posts that
+    actually mattered, since a title alone rarely carries three terms.
+
+    Browsing already covers the whole window, so nothing is gained by
+    discarding rows: order them by how many terms they hit and let `limit` cut
+    the tail. Title matches count double -- a word in the title is what the
+    post is ABOUT, the same word in the body may be an aside.
+
+    Word boundaries with a short suffix allowance, because substring matching
+    pulled "SLC female partner needed" into an injury search.
     """
     import re
-    hay = f"{r.title} {r.text}".lower()
     terms = [t for t in re.findall(r"[a-z0-9]{3,}", query.lower()) if t not in _STOP]
     if not terms:
-        return True
-    return any(re.search(rf"\b{re.escape(t)}\w{{0,4}}\b", hay) for t in terms)
+        return 1
+    title, body = (r.title or "").lower(), (r.text or "").lower()
+    score = 0
+    for t in terms:
+        pat = rf"\b{re.escape(t)}\w{{0,4}}\b"
+        if re.search(pat, title):
+            score += 2
+        elif re.search(pat, body):
+            score += 1
+    return score
 
 
 _STOP = {"the", "and", "for", "with", "что", "are", "was", "how", "why", "who"}
