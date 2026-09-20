@@ -266,22 +266,32 @@ def _is_bot(author: str | None) -> bool:
 
 
 def _is_empty(r: Result) -> bool:
-    """Drop rows whose content the archive kept only as a tombstone.
+    """Drop rows with nothing usable left.
 
-    Removal leaves the row in place with the body replaced by "[removed]".
-    Those cost tokens, sit in the corpus forever, and can make a subreddit look
-    like it actively discusses something that was in fact moderated away. The
-    title survives, but a title without its body is not a complaint -- and for
-    mining what people actually said, the body IS the data.
+    Dropping every tombstoned POST was wrong, and badly so. Strict subreddits
+    auto-remove submissions pending human review, and the archive ingests at
+    creation time -- so it stores the removed state. Measured 2026-09-20:
+    r/running is 94% "[removed]" against r/hyrox's 2%. Filtering those out made
+    one of the most active running communities on Reddit look like it posts
+    twenty times a fortnight.
+
+    The title survives removal, and comments are not auto-removed at all. So
+    keep the post, flag the missing body, and get the substance from
+    read_discussion. A tombstoned comment really is worthless -- there is no
+    title to fall back on.
     """
     if _is_bot(r.author):
         return True
     body = (r.text or "").strip().lower()
+    kind = r.raw.get("kind")
+    if kind == "comments":
+        return body in _TOMBSTONE or not body
     if body in _TOMBSTONE:
-        return True
-    # A comment with no body at all is pure noise; a post without selftext may
-    # still be a link post worth keeping.
-    return r.raw.get("kind") == "comments" and not body
+        # Keep it only if the title alone carries meaning.
+        r.text = ""
+        r.raw["body_removed"] = True
+        return len((r.title or "").split()) < 4
+    return False
 
 
 def _flatten(nodes: object, depth: int = 0) -> list[dict]:

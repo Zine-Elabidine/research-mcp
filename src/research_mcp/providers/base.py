@@ -90,6 +90,9 @@ class Result:
         # A provider that had to widen the query must say so. Otherwise a loose
         # match reads as a direct hit, and broadening quietly becomes a way of
         # manufacturing evidence for a question nobody actually discussed.
+        if self.raw.get("body_removed"):
+            out["note"] = ("body auto-removed by the subreddit before archiving; "
+                           "title only -- use read_discussion for the content")
         if orig := self.raw.get("_broadened_from"):
             out["matched_on"] = self.query
             out["note"] = f"no match for the full question; broadened from: {orig!r}"
