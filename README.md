@@ -77,6 +77,7 @@ yours if a provider disappears.
 | `search_community` | complaints, lived experience, launch reception, hiring demand |
 | `search_web` | published claims, articles, docs — the consensus layer |
 | `read_discussion` | the full comment thread under one Reddit post |
+| `search_demand` | where money already moves: freelance gigs (budget, bids) and GitHub repos |
 | `corpus_stats` | how much history has accumulated |
 | `providers_status` | which sources are live vs missing credentials |
 
@@ -153,6 +154,25 @@ npx @modelcontextprotocol/inspector uv --directory ~/research-mcp run research-m
     violation, but it does breach X's ToS — fine for personal tooling, revisit
     entirely if this ever ships to users. Providers in this category do get shut
     down (SocialData.tools), hence the swappable interface and the corpus.
+
+### Tracing (optional)
+
+Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (plus `LANGFUSE_BASE_URL`
+for a self-hosted instance) and every tool call becomes a Langfuse trace, with
+one retriever observation per provider query:
+
+```
+search_community   {"question": "bank reconciliation pain", "platforms": ["hn","reddit"]}
+  ├ hn        DEFAULT  {"count": 2, "top": ["Launch HN: Decentro ...", ...]}
+  └ reddit    ERROR    ProviderError: no global full-text search: pass subreddits
+```
+
+That answers what the corpus can't: which source was slow, failed or came back
+empty for a given question. A pass that silently lost a whole source class
+looks like thin evidence in the reply; in the trace it is a red row. Empty
+results are logged at WARNING, failures at ERROR. Only summaries are sent
+(counts, top titles); full rows stay in the local corpus. Without the keys,
+tracing is a no-op.
 
 ## Status
 

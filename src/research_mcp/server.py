@@ -24,6 +24,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 from .corpus import Corpus                                   # noqa: E402
 from .providers import Gigs, GitHub, HackerNews, Reddit, Tavily, X         # noqa: E402
 from .router import fan_out                                  # noqa: E402
+from .tracing import traced_tool                             # noqa: E402
 
 mcp = MCPServer(
     "research",
@@ -42,6 +43,7 @@ COMMUNITY_PROVIDERS = {"hn": HN, "reddit": REDDIT, "x": XP}
 
 
 @mcp.tool()
+@traced_tool
 async def search_community(
     question: str,
     platforms: list[str] | None = None,
@@ -108,6 +110,7 @@ async def search_community(
 
 
 @mcp.tool()
+@traced_tool
 async def search_web(
     question: str,
     queries: list[str] | None = None,
@@ -143,6 +146,7 @@ async def search_web(
 
 
 @mcp.tool()
+@traced_tool
 async def read_discussion(
     post_url_or_id: str,
     limit: int = 200,
@@ -195,6 +199,7 @@ def _post_id(s: str) -> str:
 
 
 @mcp.tool()
+@traced_tool
 async def search_demand(
     question: str,
     since: str | None = None,

@@ -20,6 +20,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
+from . import tracing
 from .providers.base import Provider, ProviderError, Result
 
 
@@ -58,16 +59,28 @@ class Pass:
 
 async def _one(provider: Provider, query: str, limit: int, since: str | None,
                until: str | None, extra: dict[str, Any]) -> tuple[str, list[Result] | Exception]:
-    try:
-        kwargs = {k: v for k, v in extra.items() if k in _accepted(provider)}
-        res = await provider.search(query, limit=limit, since=since, until=until, **kwargs)
-        return provider.name, res
-    except _partial() as pr:
-        # A provider enforcing a constraint the upstream API ignored. The
-        # surviving results are good; the drop count is worth reporting.
-        return provider.name, pr
-    except (ProviderError, Exception) as e:   # noqa: BLE001 - nothing may escape
-        return provider.name, e
+    kwargs = {k: v for k, v in extra.items() if k in _accepted(provider)}
+    with tracing.observe(
+        provider.name, as_type="retriever",
+        input={"query": query, "limit": limit, "since": since, "until": until,
+               **{k: v for k, v in kwargs.items() if v is not None}},
+        metadata={"source_class": provider.source_class},
+    ) as obs:
+        try:
+            res = await provider.search(query, limit=limit, since=since, until=until, **kwargs)
+            # Empty is not an error, but it is the case worth finding later.
+            obs.update(output=tracing.summarise(res),
+                       level="DEFAULT" if res else "WARNING")
+            return provider.name, res
+        except _partial() as pr:
+            # A provider enforcing a constraint the upstream API ignored. The
+            # surviving results are good; the drop count is worth reporting.
+            obs.update(output=tracing.summarise(pr.results), level="WARNING",
+                       status_message=type(pr).__name__)
+            return provider.name, pr
+        except (ProviderError, Exception) as e:   # noqa: BLE001 - nothing may escape
+            obs.update(level="ERROR", status_message=f"{type(e).__name__}: {e}")
+            return provider.name, e
 
 
 def _partial():
